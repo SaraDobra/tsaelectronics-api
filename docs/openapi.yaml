@@ -1,0 +1,221 @@
+openapi: 3.0.3
+info:
+  title: TsaElectronics API
+  version: 0.1.0
+  description: >
+    Backend-authored contract, reconciled with the frontend's draft proposal.
+    See API-CONTRACT-RESPONSE.md in this same folder for the full explanation
+    of what changed and why. This is a snapshot to unblock frontend work early
+    — once a shared dev/staging environment exists, prefer the live
+    auto-generated spec at /swagger/v1/swagger.json over this static file.
+
+servers:
+  - url: /api
+
+tags:
+  - name: Auth
+  - name: Products
+
+paths:
+  /auth/register:
+    post:
+      tags: [Auth]
+      summary: Register a new customer account
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RegisterRequest' }
+      responses:
+        '200':
+          description: Account created, JWT issued
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthResponse' }
+        '400':
+          description: Validation error (e.g. email already registered)
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
+
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Log in and receive a JWT
+      description: >
+        Returns the JWT as a JSON body, NOT a cookie. Intended to be called
+        server-side by the frontend's Auth.js Credentials provider, which
+        wraps the token in its own encrypted session cookie on the Next.js
+        domain. This API never sets an auth cookie itself.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginRequest' }
+      responses:
+        '200':
+          description: Authenticated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthResponse' }
+        '401':
+          description: Invalid email or password
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
+
+  /products:
+    get:
+      tags: [Products]
+      summary: List products (paginated, filterable)
+      description: >
+        Search/filtering is backend-driven SQL (indexed columns) - no Algolia
+        or other third-party search index. Query params match what the
+        frontend draft already proposed.
+      parameters:
+        - { name: q, in: query, schema: { type: string }, description: Free-text search on name/brand/description }
+        - { name: brand, in: query, schema: { type: string } }
+        - { name: categoryId, in: query, schema: { type: string, format: uuid } }
+        - { name: minPrice, in: query, schema: { type: integer }, description: Minor units (cents) }
+        - { name: maxPrice, in: query, schema: { type: integer }, description: Minor units (cents) }
+        - { name: page, in: query, schema: { type: integer, default: 1 } }
+        - { name: pageSize, in: query, schema: { type: integer, default: 20 } }
+      responses:
+        '200':
+          description: A page of products
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PagedProducts' }
+
+  /products/{slug}:
+    get:
+      tags: [Products]
+      summary: Get a single product by slug, including all purchasable variants
+      parameters:
+        - { name: slug, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: The product
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Product' }
+        '404':
+          description: Not found
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
+
+components:
+  schemas:
+    Money:
+      type: object
+      required: [amountMinor, currency]
+      properties:
+        amountMinor:
+          type: integer
+          description: Integer amount in the currency's minor unit (cents). Never a float.
+          example: 99900
+        currency:
+          type: string
+          minLength: 3
+          maxLength: 3
+          description: ISO 4217 code. Always "USD" for now (single-currency scope).
+          example: USD
+
+    ProductVariant:
+      type: object
+      description: >
+        A specific purchasable configuration of a product (e.g. a color +
+        storage combination). Price and stock live here, not on Product,
+        since different variants of the same product can have different
+        prices and independent stock levels.
+      required: [id, sku, price, stockQuantity]
+      properties:
+        id: { type: string, format: uuid }
+        sku: { type: string, example: IPH15-256-BLK }
+        price: { $ref: '#/components/schemas/Money' }
+        stockQuantity: { type: integer }
+        color: { type: string, nullable: true, example: Space Black }
+        storage: { type: string, nullable: true, example: 256GB }
+        ram: { type: string, nullable: true, example: 16GB }
+
+    Product:
+      type: object
+      required: [id, slug, name, brand, description, categoryId, categoryName, variants, imageUrls]
+      properties:
+        id: { type: string, format: uuid }
+        slug: { type: string, example: iphone-15 }
+        name: { type: string }
+        brand: { type: string }
+        description: { type: string }
+        categoryId: { type: string, format: uuid }
+        categoryName: { type: string }
+        imageUrls:
+          type: array
+          items: { type: string, format: uri }
+          description: Ready-to-use CDN URLs (Azure Blob Storage + CDN)
+        variants:
+          type: array
+          items: { $ref: '#/components/schemas/ProductVariant' }
+
+    PagedProducts:
+      type: object
+      required: [items, page, pageSize, total]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Product' }
+        page: { type: integer }
+        pageSize: { type: integer }
+        total: { type: integer }
+
+    RegisterRequest:
+      type: object
+      required: [email, password, firstName, lastName]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string, minLength: 8 }
+        firstName: { type: string }
+        lastName: { type: string }
+
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string }
+
+    AuthResponse:
+      type: object
+      required: [token, userId, email, firstName, lastName, roles]
+      properties:
+        token: { type: string, description: JWT - store server-side only, never expose to client JS }
+        userId: { type: string, format: uuid }
+        email: { type: string, format: email }
+        firstName: { type: string }
+        lastName: { type: string }
+        roles:
+          type: array
+          items: { type: string }
+
+    # RFC 7807 - .NET native ProblemDetails. Agreed error shape.
+    ProblemDetails:
+      type: object
+      required: [title, status]
+      properties:
+        type: { type: string }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        instance: { type: string }
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >
+        Sent as "Authorization: Bearer <token>" by the frontend's server-side
+        code (Route Handlers / Server Actions), never by browser JS directly.
+
+security: []
